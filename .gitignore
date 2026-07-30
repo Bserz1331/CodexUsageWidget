@@ -1,0 +1,11 @@
+.vs/
+bin/
+obj/
+artifacts/
+TestResults/
+*.user
+*.suo
+*.tmp
+*.log
+.tools/
+/CodexUsageWidget.exe

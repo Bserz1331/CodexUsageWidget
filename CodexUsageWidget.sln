@@ -1,0 +1,24 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CodexUsageWidget", "src\CodexUsageWidget\CodexUsageWidget.csproj", "{E0A65B98-773F-4525-A7FC-E80AAE7CA340}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CodexUsageWidget.Tests", "tests\CodexUsageWidget.Tests\CodexUsageWidget.Tests.csproj", "{75D57F72-50B6-4697-96E4-EB9DCD2DC833}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{E0A65B98-773F-4525-A7FC-E80AAE7CA340}.Debug|Any CPU.ActiveCfg = Debug|x64
+		{E0A65B98-773F-4525-A7FC-E80AAE7CA340}.Debug|Any CPU.Build.0 = Debug|x64
+		{E0A65B98-773F-4525-A7FC-E80AAE7CA340}.Release|Any CPU.ActiveCfg = Release|x64
+		{E0A65B98-773F-4525-A7FC-E80AAE7CA340}.Release|Any CPU.Build.0 = Release|x64
+		{75D57F72-50B6-4697-96E4-EB9DCD2DC833}.Debug|Any CPU.ActiveCfg = Debug|x64
+		{75D57F72-50B6-4697-96E4-EB9DCD2DC833}.Debug|Any CPU.Build.0 = Debug|x64
+		{75D57F72-50B6-4697-96E4-EB9DCD2DC833}.Release|Any CPU.ActiveCfg = Release|x64
+		{75D57F72-50B6-4697-96E4-EB9DCD2DC833}.Release|Any CPU.Build.0 = Release|x64
+	EndGlobalSection
+EndGlobal
