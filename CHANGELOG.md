@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.3.0
+
+- Added a compact dark-themed support dialog accessible from the tray menu.
+- Added local QR codes and one-click copy actions for USDT BEP20 and TRC20 addresses.
+- Added a Ko-fi link and explicit network safety guidance.
+- Kept application updates in notification-only mode; the app never replaces its own EXE.
+
 ## 2.2.4
 
 - Added startup self-repair for invalid settings and off-screen window positions.

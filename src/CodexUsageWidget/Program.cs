@@ -17,8 +17,8 @@ using Microsoft.Win32;
 
 [assembly: AssemblyTitle("Codex Usage Widget")]
 [assembly: AssemblyProduct("Codex Usage Widget")]
-[assembly: AssemblyVersion("2.2.4.0")]
-[assembly: AssemblyFileVersion("2.2.4.0")]
+[assembly: AssemblyVersion("2.3.0.0")]
+[assembly: AssemblyFileVersion("2.3.0.0")]
 [assembly: System.Runtime.CompilerServices.InternalsVisibleTo("CodexUsageWidget.Tests")]
 [assembly: SupportedOSPlatform("windows")]
 
@@ -613,6 +613,11 @@ namespace CodexUsageWidget
             menu.Items.Add(opacityMenu);
             menu.Items.Add("立即更新", null, delegate { nextCheckAt = DateTime.MinValue; CheckUsage(); });
             menu.Items.Add("官方使用量頁面", null, delegate { OpenDashboard(); });
+            menu.Items.Add("支持開發…", null, delegate
+            {
+                using SupportDialog dialog = new SupportDialog();
+                dialog.ShowDialog(this);
+            });
             menu.Items.Add(new ToolStripSeparator());
             ToolStripMenuItem startItem = new ToolStripMenuItem("開機啟動");
             startItem.Checked = IsAutoStartEnabled();
