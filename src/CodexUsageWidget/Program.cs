@@ -6,19 +6,21 @@ using System.Drawing.Drawing2D;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Net.Http;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using Microsoft.Win32;
 
 [assembly: AssemblyTitle("Codex Usage Widget")]
 [assembly: AssemblyProduct("Codex Usage Widget")]
-[assembly: AssemblyVersion("2.3.0.0")]
-[assembly: AssemblyFileVersion("2.3.0.0")]
+[assembly: AssemblyVersion("2.3.2.0")]
+[assembly: AssemblyFileVersion("2.3.2.0")]
 [assembly: System.Runtime.CompilerServices.InternalsVisibleTo("CodexUsageWidget.Tests")]
 [assembly: SupportedOSPlatform("windows")]
 
@@ -71,6 +73,10 @@ namespace CodexUsageWidget
 
     internal static class UsageReader
     {
+        private static readonly object CacheLock = new object();
+        private static UsageInfo cachedLatest;
+        private static bool cacheInitialized;
+
         public static UsageInfo ReadLatest(string preferredPath, out string failureReason)
         {
             failureReason = "";
@@ -86,7 +92,15 @@ namespace CodexUsageWidget
             if (!string.IsNullOrEmpty(preferredPath) && File.Exists(preferredPath))
             {
                 UsageInfo preferred = ReadFile(preferredPath);
-                if (preferred != null) return preferred;
+                lock (CacheLock)
+                {
+                    if (preferred != null && cacheInitialized)
+                    {
+                        if (cachedLatest == null || preferred.CapturedAt >= cachedLatest.CapturedAt)
+                            cachedLatest = preferred;
+                        return cachedLatest;
+                    }
+                }
             }
 
             IEnumerable<string> files;
@@ -110,6 +124,13 @@ namespace CodexUsageWidget
                 UsageInfo candidate = ReadFile(file);
                 if (candidate != null && (newest == null || candidate.CapturedAt > newest.CapturedAt))
                     newest = candidate;
+            }
+            lock (CacheLock)
+            {
+                cacheInitialized = true;
+                if (newest != null && (cachedLatest == null || newest.CapturedAt >= cachedLatest.CapturedAt))
+                    cachedLatest = newest;
+                newest = cachedLatest;
             }
             if (newest == null)
                 failureReason = files.Any()
@@ -198,10 +219,11 @@ namespace CodexUsageWidget
                 string timestampText = root.TryGetProperty("timestamp", out timestamp) ? timestamp.GetString() : "";
                 if (!DateTime.TryParse(timestampText, CultureInfo.InvariantCulture,
                     DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out captured))
-                    captured = DateTime.UtcNow;
+                    return null;
 
                 UsageInfo result = new UsageInfo();
-                result.UsedPercent = GetDouble(weekly.Value, "used_percent");
+                if (!TryGetDouble(weekly.Value, "used_percent", out result.UsedPercent))
+                    return null;
                 if (double.IsNaN(result.UsedPercent) ||
                     result.UsedPercent < 0 || result.UsedPercent > 100)
                     return null;
@@ -239,6 +261,13 @@ namespace CodexUsageWidget
             JsonElement value;
             return source.TryGetProperty(key, out value) && value.TryGetDouble(out double result) ? result : 0;
         }
+        private static bool TryGetDouble(JsonElement source, string key, out double result)
+        {
+            JsonElement value;
+            result = 0;
+            return source.TryGetProperty(key, out value) &&
+                value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out result);
+        }
     }
 
     internal sealed class WidgetSettings
@@ -259,6 +288,7 @@ namespace CodexUsageWidget
         public int Y = int.MinValue;
         public int HistoryRetentionDays = 90;
         public string UpdateManifestUrl = "";
+        public DateTime LastUpdateCheckUtc = DateTime.MinValue;
 
         internal bool Normalize()
         {
@@ -350,6 +380,23 @@ namespace CodexUsageWidget
 
     internal static class WidgetUiPolicy
     {
+        internal static Version ParseReleaseVersion(string tag)
+        {
+            if (string.IsNullOrWhiteSpace(tag)) return null;
+            string value = tag.Trim();
+            if (value.StartsWith("v", StringComparison.OrdinalIgnoreCase)) value = value.Substring(1);
+            return Version.TryParse(value, out Version version) ? version : null;
+        }
+
+        internal static bool ShouldRecoverUpdate(DateTime now, bool checkRunning,
+            DateTime checkStartedAt, DateTime lastCompletedAt, int fallbackMinutes)
+        {
+            TimeSpan timeout = TimeSpan.FromMinutes(Math.Max(2, fallbackMinutes * 2));
+            if (checkRunning && checkStartedAt != DateTime.MinValue && now - checkStartedAt > timeout)
+                return true;
+            return !checkRunning && lastCompletedAt != DateTime.MinValue && now - lastCompletedAt > timeout;
+        }
+
         internal static Color QuotaColor(double remaining)
         {
             if (remaining < 10) return Color.FromArgb(239, 68, 68);
@@ -485,6 +532,7 @@ namespace CodexUsageWidget
         private readonly UsageBar usageBar;
         private readonly Timer uiTimer;
         private readonly Timer eventDebounceTimer;
+        private readonly System.Threading.Timer healthTimer;
         private readonly NotifyIcon tray;
         private readonly ToolStripMenuItem lockItem;
         private readonly ToolStripMenuItem clickThroughItem;
@@ -506,6 +554,14 @@ namespace CodexUsageWidget
         private string pendingChangedPath;
         private bool checkRunning;
         private bool checkPending;
+        private int checkGeneration;
+        private DateTime checkStartedAt = DateTime.MinValue;
+        private DateTime lastCheckCompletedAt = DateTime.MinValue;
+        private DateTime lastSessionEventAt = DateTime.MinValue;
+        private bool recoveringUpdatePipeline;
+        private int lastScheduledCheckMinutes = 1;
+        private bool updateCheckRunning;
+        private string pendingReleaseUrl;
         private int consecutiveReadFailures;
         private int lastTrayDisplay = int.MinValue;
         private DateTime lastHistoryCleanup = DateTime.MinValue;
@@ -518,6 +574,9 @@ namespace CodexUsageWidget
         private bool historyCleanupRunning;
         private readonly object historyLock = new object();
         private readonly int showMessage;
+        private const string LatestReleaseApi = "https://api.github.com/repos/Bserz1331/CodexUsageWidget/releases/latest";
+        private const string ReleasesBaseUrl = "https://github.com/Bserz1331/CodexUsageWidget/releases/";
+        private static readonly HttpClient UpdateClient = CreateUpdateClient();
 
         private const int GwlExStyle = -20;
         private const int WsExTransparent = 0x20;
@@ -539,6 +598,7 @@ namespace CodexUsageWidget
         {
             settings = WidgetSettings.Load();
             settings.Save();
+            RepairAutoStartPath();
             Text = "Codex Usage Widget";
             FormBorderStyle = FormBorderStyle.None;
             ShowInTaskbar = false;
@@ -624,7 +684,7 @@ namespace CodexUsageWidget
             startItem.Click += delegate { startItem.Checked = !startItem.Checked; SetAutoStart(startItem.Checked); };
             menu.Items.Add(startItem);
             menu.Items.Add("複製診斷資訊", null, delegate { CopyDiagnostics(); });
-            menu.Items.Add("檢查更新", null, delegate { CheckForUpdates(); });
+            menu.Items.Add("檢查更新", null, delegate { _ = CheckForUpdatesAsync(true); });
             showWidgetItem = new ToolStripMenuItem("顯示浮窗");
             showWidgetItem.Checked = settings.ShowWidget;
             showWidgetItem.Click += delegate { SetWidgetVisible(!settings.ShowWidget); };
@@ -634,6 +694,10 @@ namespace CodexUsageWidget
 
             tray = new NotifyIcon { Text = "Codex Usage Widget", Icon = CreateTrayIcon(), ContextMenuStrip = menu, Visible = true };
             tray.DoubleClick += delegate { ShowFromTray(); };
+            tray.BalloonTipClicked += delegate
+            {
+                if (!string.IsNullOrEmpty(pendingReleaseUrl)) OpenUrl(pendingReleaseUrl);
+            };
 
             uiTimer = new Timer { Interval = 1000 };
             uiTimer.Tick += delegate
@@ -646,6 +710,15 @@ namespace CodexUsageWidget
             eventDebounceTimer = new Timer { Interval = 600 };
             eventDebounceTimer.Tick += delegate { eventDebounceTimer.Stop(); nextCheckAt = DateTime.MinValue; CheckUsage(); };
             uiTimer.Start();
+            healthTimer = new System.Threading.Timer(delegate
+            {
+                try
+                {
+                    if (!IsDisposed && IsHandleCreated)
+                        BeginInvoke((Action)EnsureUpdateHealth);
+                }
+                catch { }
+            }, null, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
             showMessage = RegisterWindowMessage("CodexUsageWidget.ShowExisting.v2");
             Shown += delegate
             {
@@ -654,6 +727,7 @@ namespace CodexUsageWidget
                 StartWatcher();
                 CleanHistory();
                 CheckUsage();
+                _ = CheckForUpdatesAsync(false);
                 if (!settings.ShowWidget) BeginInvoke((Action)delegate { Hide(); });
             };
             FormClosing += OnFormClosing;
@@ -914,7 +988,9 @@ namespace CodexUsageWidget
                 watcher.Renamed += delegate(object sender, RenamedEventArgs e)
                 {
                     pendingChangedPath = e.FullPath;
-                    BeginInvoke((Action)delegate { eventDebounceTimer.Stop(); eventDebounceTimer.Start(); });
+                    lastSessionEventAt = DateTime.Now;
+                    try { BeginInvoke((Action)delegate { eventDebounceTimer.Stop(); eventDebounceTimer.Start(); }); }
+                    catch { }
                 };
                 watcher.Error += delegate(object sender, ErrorEventArgs e)
                 {
@@ -939,6 +1015,7 @@ namespace CodexUsageWidget
         private void OnSessionChanged(object sender, FileSystemEventArgs e)
         {
             pendingChangedPath = e.FullPath;
+            lastSessionEventAt = DateTime.Now;
             try { BeginInvoke((Action)delegate { eventDebounceTimer.Stop(); eventDebounceTimer.Start(); }); }
             catch { }
         }
@@ -952,6 +1029,8 @@ namespace CodexUsageWidget
             }
 
             checkRunning = true;
+            checkStartedAt = DateTime.Now;
+            int generation = ++checkGeneration;
             string preferredPath = pendingChangedPath;
             pendingChangedPath = null;
             System.Threading.ThreadPool.QueueUserWorkItem(delegate
@@ -969,15 +1048,45 @@ namespace CodexUsageWidget
                 catch (Exception ex) { failure = ex; }
                 try
                 {
-                    BeginInvoke((Action)delegate { ApplyUsageResult(info, failure, failureReason); });
+                    BeginInvoke((Action)delegate
+                    {
+                        if (generation != checkGeneration) return;
+                        ApplyUsageResult(info, failure, failureReason);
+                    });
                 }
                 catch { }
             });
         }
 
+        private void EnsureUpdateHealth()
+        {
+            int fallbackMinutes = Math.Max(1, lastScheduledCheckMinutes);
+            if (!WidgetUiPolicy.ShouldRecoverUpdate(DateTime.Now, checkRunning,
+                checkStartedAt, lastCheckCompletedAt, fallbackMinutes)) return;
+
+            recoveringUpdatePipeline = true;
+            AppLog.Error("UpdatePipeline.Watchdog",
+                new TimeoutException("更新管線逾時，正在自動重建。running=" + checkRunning +
+                    ", started=" + checkStartedAt.ToString("o") +
+                    ", completed=" + lastCheckCompletedAt.ToString("o") +
+                    ", lastSessionEvent=" + lastSessionEventAt.ToString("o")));
+            checkGeneration++;
+            checkRunning = false;
+            checkPending = false;
+            checkStartedAt = DateTime.MinValue;
+            eventDebounceTimer.Stop();
+            StartWatcher();
+            resetLabel.Text = "（資料更新中斷，重試中）";
+            resetLabel.ForeColor = Color.FromArgb(245, 158, 11);
+            nextCheckAt = DateTime.MinValue;
+            CheckUsage();
+        }
+
         private void ApplyUsageResult(UsageInfo info, Exception failure, string failureReason)
         {
             checkRunning = false;
+            checkStartedAt = DateTime.MinValue;
+            lastCheckCompletedAt = DateTime.Now;
             if (failure != null) AppLog.Error("CheckUsage", failure);
 
             if (info != null)
@@ -1001,6 +1110,7 @@ namespace CodexUsageWidget
                     lastChangedAt = DateTime.Now;
                 }
                 currentInfo = info;
+                recoveringUpdatePipeline = false;
                 double remaining = Math.Max(0, 100 - info.UsedPercent);
                 remainingLabel.Text = "剩餘 " + remaining.ToString("0.#") + "%";
                 bool stalled = quotaStallStartedAt != DateTime.MinValue &&
@@ -1021,6 +1131,7 @@ namespace CodexUsageWidget
 
                 bool idle = DateTime.Now - lastChangedAt >= TimeSpan.FromMinutes(settings.IdleAfterMinutes);
                 int minutes = idle ? settings.IdleMinutes : settings.NormalMinutes;
+                lastScheduledCheckMinutes = Math.Max(1, minutes);
                 nextCheckAt = DateTime.Now.AddMinutes(Math.Max(1, minutes));
             }
             else
@@ -1094,6 +1205,7 @@ namespace CodexUsageWidget
             if (age.TotalMinutes < 1) dataAge = "資料：剛剛";
             else if (age.TotalHours < 24) dataAge = "資料：" + ((int)age.TotalMinutes) + "分前";
             else dataAge = "資料：" + ((int)age.TotalDays) + "天前";
+            if (recoveringUpdatePipeline) dataAge = "資料：更新中斷";
             int seconds = Math.Max(0, (int)Math.Ceiling((nextCheckAt - DateTime.Now).TotalSeconds));
             updatedLabel.Text = dataAge + "　保底：" + seconds + "秒";
         }
@@ -1203,25 +1315,73 @@ namespace CodexUsageWidget
                     "Read failures: " + consecutiveReadFailures + Environment.NewLine +
                     "Last failure: " + (string.IsNullOrEmpty(lastReadFailureReason) ? "none" : lastReadFailureReason) + Environment.NewLine +
                     "Quota stalled since: " + (quotaStallStartedAt == DateTime.MinValue ? "none" : quotaStallStartedAt.ToString("o")) + Environment.NewLine +
+                    "Check started: " + (checkStartedAt == DateTime.MinValue ? "none" : checkStartedAt.ToString("o")) + Environment.NewLine +
+                    "Check completed: " + (lastCheckCompletedAt == DateTime.MinValue ? "none" : lastCheckCompletedAt.ToString("o")) + Environment.NewLine +
+                    "Last session event: " + (lastSessionEventAt == DateTime.MinValue ? "none" : lastSessionEventAt.ToString("o")) + Environment.NewLine +
                     "Log: " + AppLog.LogPath;
                 Clipboard.SetText(info);
                 tray.ShowBalloonTip(1800, "Codex Usage Widget", "診斷資訊已複製。", ToolTipIcon.Info);
             }
             catch (Exception ex) { AppLog.Error("CopyDiagnostics", ex); }
         }
-        private void CheckForUpdates()
+        private static HttpClient CreateUpdateClient()
         {
-            Version version = Assembly.GetExecutingAssembly().GetName().Version;
-            if (string.IsNullOrWhiteSpace(settings.UpdateManifestUrl))
+            HttpClient client = new HttpClient { Timeout = TimeSpan.FromSeconds(12) };
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("CodexUsageWidget/2.3.2");
+            client.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
+            return client;
+        }
+        private async Task CheckForUpdatesAsync(bool manual)
+        {
+            if (updateCheckRunning) return;
+            if (!manual && settings.LastUpdateCheckUtc != DateTime.MinValue &&
+                DateTime.UtcNow - settings.LastUpdateCheckUtc < TimeSpan.FromHours(24)) return;
+            updateCheckRunning = true;
+            try
             {
-                MessageBox.Show("目前版本：" + version + Environment.NewLine +
-                    "尚未設定可信任的更新來源。可在未來提供 HTTPS 版本資訊網址後啟用自動更新。",
-                    "檢查更新", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
+                using HttpResponseMessage response = await UpdateClient.GetAsync(LatestReleaseApi);
+                response.EnsureSuccessStatusCode();
+                string json = await response.Content.ReadAsStringAsync();
+                using JsonDocument document = JsonDocument.Parse(json);
+                JsonElement root = document.RootElement;
+                string tag = root.TryGetProperty("tag_name", out JsonElement tagValue) ? tagValue.GetString() : "";
+                string url = root.TryGetProperty("html_url", out JsonElement urlValue) ? urlValue.GetString() : "";
+                Version latest = WidgetUiPolicy.ParseReleaseVersion(tag);
+                Version current = Assembly.GetExecutingAssembly().GetName().Version;
+                if (latest == null || string.IsNullOrWhiteSpace(url) ||
+                    !url.StartsWith(ReleasesBaseUrl, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException("GitHub Release 回應缺少有效版本或網址。");
+
+                settings.LastUpdateCheckUtc = DateTime.UtcNow;
+                settings.Save();
+                if (latest > current)
+                {
+                    pendingReleaseUrl = url;
+                    if (manual)
+                    {
+                        DialogResult result = MessageBox.Show(this,
+                            "已有新版本 " + tag + "。" + Environment.NewLine +
+                            "目前版本：v" + current.ToString(3) + Environment.NewLine + Environment.NewLine +
+                            "是否開啟 GitHub Release 下載頁？",
+                            "發現新版本", MessageBoxButtons.YesNo, MessageBoxIcon.Information);
+                        if (result == DialogResult.Yes) OpenUrl(url);
+                    }
+                    else
+                        tray.ShowBalloonTip(8000, "Codex Usage Widget 有新版本",
+                            tag + " 已發布，點擊通知前往下載。", ToolTipIcon.Info);
+                }
+                else if (manual)
+                    MessageBox.Show(this, "目前已是最新版本：v" + current.ToString(3),
+                        "檢查更新", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
-            MessageBox.Show("目前版本：" + version + Environment.NewLine +
-                "更新來源已保留，但本版不會在未驗證簽章前自動替換 EXE。",
-                "檢查更新", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            catch (Exception ex)
+            {
+                AppLog.Error("CheckForUpdates", ex);
+                if (manual)
+                    MessageBox.Show(this, "暫時無法連線至 GitHub 檢查更新。" + Environment.NewLine + ex.Message,
+                        "檢查更新", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+            finally { updateCheckRunning = false; }
         }
         private void OnPowerModeChanged(object sender, PowerModeChangedEventArgs e)
         {
@@ -1240,6 +1400,11 @@ namespace CodexUsageWidget
         private static void OpenDashboard()
         {
             Process.Start(new ProcessStartInfo("https://chatgpt.com/codex/settings/usage") { UseShellExecute = true });
+        }
+        private static void OpenUrl(string url)
+        {
+            try { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); }
+            catch (Exception ex) { AppLog.Error("OpenUrl", ex); }
         }
         private void SetWidgetVisible(bool visible)
         {
@@ -1268,6 +1433,7 @@ namespace CodexUsageWidget
             }
             SavePosition();
             uiTimer.Stop();
+            healthTimer.Dispose();
             eventDebounceTimer.Stop();
             if (watcher != null) watcher.Dispose();
             SystemEvents.PowerModeChanged -= OnPowerModeChanged;
@@ -1279,6 +1445,20 @@ namespace CodexUsageWidget
         {
             using (RegistryKey key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run"))
                 return key != null && key.GetValue("CodexUsageWidget") != null;
+        }
+        private static void RepairAutoStartPath()
+        {
+            try
+            {
+                using RegistryKey key = Registry.CurrentUser.OpenSubKey(
+                    @"Software\Microsoft\Windows\CurrentVersion\Run", true);
+                if (key == null || key.GetValue("CodexUsageWidget") == null) return;
+                string expected = "\"" + Application.ExecutablePath + "\"";
+                if (!string.Equals(Convert.ToString(key.GetValue("CodexUsageWidget")), expected,
+                    StringComparison.OrdinalIgnoreCase))
+                    key.SetValue("CodexUsageWidget", expected);
+            }
+            catch (Exception ex) { AppLog.Error("RepairAutoStartPath", ex); }
         }
         private static void SetAutoStart(bool enabled)
         {

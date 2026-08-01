@@ -132,4 +132,26 @@ public sealed class UsageReaderTests
 
         Assert.Null(UsageReader.ParseLine(json));
     }
+
+    [Fact]
+    public void ParseLine_RejectsMissingPercentage()
+    {
+        const string json = """
+        { "timestamp":"2026-07-29T14:00:00Z", "payload": { "type":"token_count",
+          "rate_limits": { "primary": { "window_minutes":10080, "resets_at":1785900000 } } } }
+        """;
+
+        Assert.Null(UsageReader.ParseLine(json));
+    }
+
+    [Fact]
+    public void ParseLine_RejectsInvalidTimestamp()
+    {
+        const string json = """
+        { "timestamp":"not-a-time", "payload": { "type":"token_count",
+          "rate_limits": { "primary": { "used_percent":45, "window_minutes":10080, "resets_at":1785900000 } } } }
+        """;
+
+        Assert.Null(UsageReader.ParseLine(json));
+    }
 }

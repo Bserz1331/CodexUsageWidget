@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.3.2
+
+- Added daily and manual GitHub Release update notifications without automatic EXE replacement.
+- Rejected quota records with missing percentages or invalid timestamps.
+- Kept an event-driven latest-session cache to avoid older session events masking newer quota data.
+- Made watchdog recovery follow the interval actually scheduled for the current activity state.
+- Disposed locally generated QR images when the support dialog closes.
+- Added tag-triggered GitHub Release automation.
+
+## 2.3.1
+
+- Added an independent watchdog that rebuilds stalled file monitoring and fallback checks.
+- Prevented abandoned background reads from applying after watchdog recovery.
+- Added explicit stale-pipeline status and update timing to diagnostics.
+- Automatically repairs an enabled Windows startup entry to the currently running EXE.
+
 ## 2.3.0
 
 - Added a compact dark-themed support dialog accessible from the tray menu.

@@ -1,6 +1,6 @@
 # Codex Usage Widget
 
-適用於 Windows 的非官方 Codex 每週使用量浮窗與系統匣工具。
+適用於 Windows 的非官方 Codex Plus 每週使用量浮窗與系統匣工具。
 
 > This is an unofficial community project. It is not affiliated with or endorsed by OpenAI.
 
@@ -64,15 +64,14 @@ dotnet publish src/CodexUsageWidget/CodexUsageWidget.csproj `
 
 ## 相容性提醒
 
-Codex本機session格式不是公開且保證穩定的API。
-Codex更新後，解析器可能需要同步調整。若發生問題，請在系統匣右鍵選擇「複製診斷資訊」並附在Issue中，請勿上傳完整session檔案。
+Codex本機session格式不是公開且保證穩定的API。Codex更新後，解析器可能需要同步調整。若發生問題，請在系統匣右鍵選擇「複製診斷資訊」並附在Issue中；請勿上傳完整session檔案。
 
 ## 開發
 
 - 主程式：`src/CodexUsageWidget`
 - 自動化測試：`tests/CodexUsageWidget.Tests`
 - CI：`.github/workflows/build.yml`
-- 目前版本：2.2.4
+- 目前版本：2.3.2
 
 ## 授權
 

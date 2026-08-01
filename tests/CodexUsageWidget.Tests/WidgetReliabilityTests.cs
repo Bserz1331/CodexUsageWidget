@@ -1,3 +1,4 @@
+using System;
 using System.Drawing;
 using Xunit;
 
@@ -5,6 +6,43 @@ namespace CodexUsageWidget.Tests;
 
 public sealed class WidgetReliabilityTests
 {
+    [Theory]
+    [InlineData("v2.3.2", 2, 3, 2)]
+    [InlineData("2.4.0", 2, 4, 0)]
+    public void ParseReleaseVersion_AcceptsGitHubTags(string tag, int major, int minor, int build)
+    {
+        Version result = WidgetUiPolicy.ParseReleaseVersion(tag);
+
+        Assert.NotNull(result);
+        Assert.Equal(new Version(major, minor, build), result);
+    }
+
+    [Fact]
+    public void ParseReleaseVersion_RejectsInvalidTag()
+    {
+        Assert.Null(WidgetUiPolicy.ParseReleaseVersion("latest"));
+    }
+
+    [Fact]
+    public void Watchdog_RecoversHungCheckAfterTimeout()
+    {
+        DateTime now = new DateTime(2026, 8, 1, 12, 0, 0);
+
+        Assert.True(WidgetUiPolicy.ShouldRecoverUpdate(now, true,
+            now.AddMinutes(-3), now.AddMinutes(-3), 1));
+    }
+
+    [Fact]
+    public void Watchdog_RecoversStoppedFallbackPipeline()
+    {
+        DateTime now = new DateTime(2026, 8, 1, 12, 0, 0);
+
+        Assert.True(WidgetUiPolicy.ShouldRecoverUpdate(now, false,
+            DateTime.MinValue, now.AddMinutes(-11), 5));
+        Assert.False(WidgetUiPolicy.ShouldRecoverUpdate(now, false,
+            DateTime.MinValue, now.AddMinutes(-9), 5));
+    }
+
     [Fact]
     public void ParseWithBackup_RecoversFromDamagedPrimarySettings()
     {
