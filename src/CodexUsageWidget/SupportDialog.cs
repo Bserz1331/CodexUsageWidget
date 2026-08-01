@@ -68,6 +68,12 @@ namespace CodexUsageWidget
                 SizeMode = PictureBoxSizeMode.Zoom
             };
             qr.SetBounds(14, 14, 122, 122);
+            qr.Disposed += delegate
+            {
+                Image image = qr.Image;
+                qr.Image = null;
+                if (image != null) image.Dispose();
+            };
             card.Controls.Add(qr);
 
             card.Controls.Add(LabelOf(title, 150, 12, 150, 25, 11F, Color.FromArgb(235, 237, 240), FontStyle.Bold));
