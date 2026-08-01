@@ -1,6 +1,6 @@
 # Codex Usage Widget
 
-適用於 Windows 的非官方 Codex Plus 每週使用量浮窗與系統匣工具。
+適用於 Windows 的非官方 Codex 每週使用量浮窗與系統匣工具。
 
 > This is an unofficial community project. It is not affiliated with or endorsed by OpenAI.
 
